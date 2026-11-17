@@ -1,0 +1,171 @@
+# =====================================================================
+# Banque Horizon - Notebook 01 (v2) : ingestion vers la couche Bronze
+# A coller dans un notebook Fabric (PySpark), Lakehouse lh_horizon attaché
+# comme Lakehouse par défaut. Chaque bloc "# CELL" = une cellule.
+# Règle Bronze : donnée brute, tout en texte, aucune correction métier.
+# Changements v2 : horodatage UTC explicite, source du fichier vérifiée,
+# détection de dérive de schéma, journal qui ne masque plus l'erreur
+# d'origine, volumes lus ET constatés en table.
+# =====================================================================
+
+# CELL 1 - PARAMETRES
+# Dans Fabric : menu "..." de la cellule > "Toggle parameter cell".
+run_date = "2026-01-05"          # jour à charger (AAAA-MM-JJ)
+landing_root = "Files/landing"   # dossier d'atterrissage dans le Lakehouse
+strict_schema = False            # True : échec si le schéma du fichier diffère de l'attendu
+
+# CELL 2 - IMPORTS, CONTEXTE DE LOT, SCHEMA ATTENDU
+import uuid
+from datetime import datetime, timezone
+from pyspark.sql import functions as F
+from pyspark.sql.types import (StructType, StructField, StringType,
+                               LongType, TimestampType)
+
+batch_id = f"{run_date.replace('-', '')}-{uuid.uuid4().hex[:8]}"
+started_at = datetime.now(timezone.utc)   # datetime avec fuseau (UTC) explicite
+print(f"Lot {batch_id} - jour {run_date}")
+
+EXPECTED_TRANSACTION_COLS = [
+    "transaction_id", "trade_timestamp", "trade_date", "desk", "trader_id",
+    "client_id", "instrument_id", "side", "quantity", "price", "currency",
+    "status", "source_system", "notional",
+]
+
+LOG_SCHEMA = StructType([
+    StructField("batch_id", StringType()),
+    StructField("target_table", StringType()),
+    StructField("source", StringType()),
+    StructField("rows_read", LongType()),
+    StructField("rows_in_table", LongType()),
+    StructField("status", StringType()),
+    StructField("message", StringType()),
+    StructField("started_at", TimestampType()),
+    StructField("ended_at", TimestampType()),
+])
+
+# CELL 3 - FONCTIONS UTILES
+def check_schema(actual_cols, expected_cols):
+    """Compare les colonnes du fichier à l'attendu (colonnes techniques '_' ignorées)."""
+    actual = {c for c in actual_cols if not c.startswith("_")}
+    expected = set(expected_cols)
+    return sorted(expected - actual), sorted(actual - expected)
+
+def resolve_source_file_expr(sample_path):
+    """Vérifie que la colonne cachée _metadata.file_path existe pour ce type de lecture.
+    Sinon, repli sur input_file_name(). Si le fichier est absent, le repli est pris
+    sans conséquence : la vraie lecture échouera ensuite avec un message clair."""
+    try:
+        (spark.read.option("header", True).csv(sample_path)
+              .select("_metadata.file_path").limit(1).collect())
+        print("Source du fichier : _metadata.file_path")
+        return F.col("_metadata.file_path")
+    except Exception:
+        print("Source du fichier : input_file_name() (repli)")
+        return F.input_file_name()
+
+def read_csv_raw(path):
+    """Lecture brute : toutes les colonnes en texte (pas d'inférence de types)."""
+    return (spark.read.option("header", True)
+                      .option("inferSchema", False)
+                      .csv(path))
+
+def add_tech_cols(df):
+    """Colonnes techniques : traçabilité de chaque ligne jusqu'à son fichier source."""
+    return (
+        df.withColumn("_batch_id", F.lit(batch_id))
+          .withColumn("_loaded_at", F.current_timestamp())
+          .withColumn("_source_file", SOURCE_FILE_EXPR)
+    )
+
+def log_load(target_table, source, rows_read, rows_in_table, status, message=""):
+    """Journal des exécutions. Au mieux : si l'écriture du journal échoue, on le dit
+    dans la sortie du notebook mais on ne masque JAMAIS l'erreur d'origine."""
+    row = (batch_id, target_table, source, rows_read, rows_in_table, status,
+           (message or "")[:500], started_at, datetime.now(timezone.utc))
+    try:
+        (spark.createDataFrame([row], LOG_SCHEMA)
+              .write.format("delta").mode("append")
+              .option("mergeSchema", "true")
+              .saveAsTable("ops_load_log"))
+        return True
+    except Exception as log_err:
+        print(f"ATTENTION : journal non écrit ({log_err})")
+        print(f"Entrée de journal perdue : {row}")
+        return False
+
+SOURCE_FILE_EXPR = resolve_source_file_expr(
+    f"{landing_root}/transactions/transactions_{run_date.replace('-', '')}.csv")
+
+# CELL 4 - REFERENTIELS (rechargés en entier à chaque fois : petits volumes)
+for name in ["instruments", "clients"]:
+    path = f"{landing_root}/referentiel/{name}.csv"
+    table = f"bronze_{name}"
+    try:
+        df = add_tech_cols(read_csv_raw(path))
+        rows_read = df.count()
+        (df.write.format("delta").mode("overwrite")
+           .option("overwriteSchema", "true")
+           .saveAsTable(table))
+        rows_in_table = spark.table(table).count()
+        ok = rows_in_table == rows_read
+        log_load(table, path, rows_read, rows_in_table,
+                 "SUCCESS" if ok else "SUCCESS_WITH_WARNINGS",
+                 "" if ok else f"écart : {rows_read} lues, {rows_in_table} en table")
+        print(f"{table} : {rows_read} lues, {rows_in_table} en table")
+    except Exception as e:
+        log_load(table, path, None, None, "FAILED", str(e))
+        raise
+
+# CELL 5 - TRANSACTIONS DU JOUR (chargement idempotent)
+path = f"{landing_root}/transactions/transactions_{run_date.replace('-', '')}.csv"
+table = "bronze_transactions"
+try:
+    raw = read_csv_raw(path)
+
+    # Dérive de schéma : on DETECTE et on le dit. Bronze ne renomme rien (pas de
+    # correction métier) : la décision (alias, rejet, alerte) se prend en Silver.
+    missing, extra = check_schema(raw.columns, EXPECTED_TRANSACTION_COLS)
+    warnings = []
+    if missing:
+        warnings.append(f"colonnes attendues absentes : {missing}")
+    if extra:
+        warnings.append(f"colonnes nouvelles : {extra}")
+    if warnings and strict_schema:
+        raise ValueError("Schéma inattendu : " + " ; ".join(warnings))
+
+    df = add_tech_cols(raw).withColumn("_file_date", F.lit(run_date))
+    rows_read = df.count()
+
+    if spark.catalog.tableExists(table):
+        # Relancer le même jour REMPLACE les lignes de ce jour : pas de doublons.
+        (df.write.format("delta").mode("overwrite")
+           .option("replaceWhere", f"_file_date = '{run_date}'")
+           .option("mergeSchema", "true")
+           .saveAsTable(table))
+    else:
+        df.write.format("delta").mode("overwrite").saveAsTable(table)
+
+    # Rapprochement : lignes lues dans le fichier vs lignes constatées en table pour ce jour
+    rows_in_table = (spark.table(table)
+                          .where(F.col("_file_date") == run_date).count())
+    if rows_in_table != rows_read:
+        warnings.append(f"écart de volume : {rows_read} lues, {rows_in_table} en table")
+
+    log_load(table, path, rows_read, rows_in_table,
+             "SUCCESS_WITH_WARNINGS" if warnings else "SUCCESS", " ; ".join(warnings))
+    print(f"{table} : {rows_read} lues, {rows_in_table} en table pour {run_date}")
+    for w in warnings:
+        print("ATTENTION :", w)
+except Exception as e:
+    log_load(table, path, None, None, "FAILED", str(e))
+    raise
+
+# CELL 6 - CONTROLES RAPIDES (à lancer à la main, pas dans le pipeline)
+spark.sql("""
+    SELECT _file_date, COUNT(*) AS lignes, COUNT(DISTINCT _source_file) AS fichiers
+    FROM bronze_transactions
+    GROUP BY _file_date
+    ORDER BY _file_date
+""").show()
+
+spark.sql("SELECT * FROM ops_load_log ORDER BY started_at DESC").show(truncate=False)

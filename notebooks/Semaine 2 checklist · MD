@@ -1,0 +1,42 @@
+Semaine 2 - Ingestion vers Bronze
+
+Objectif : les fichiers déposés dans Files/landing arrivent en tables Delta Bronze, de façon automatisée, rejouable sans doublons et tracée.
+
+Jour 1 : premier notebook
+[ ] Créer un notebook nb_01_bronze_ingestion dans horizon-dev, Lakehouse lh_horizon par défaut
+[ ] Coller le code de notebooks/01_bronze_ingestion.py (une cellule par bloc # CELL)
+[ ] Marquer la cellule 1 comme cellule de paramètres
+[ ] Lancer pour run_date = "2026-01-05"
+[ ] Vérifier : tables bronze_transactions, bronze_clients, bronze_instruments, ops_load_log
+[ ] Arrêter la session Spark en fin de séance (elle consomme de la capacité)
+
+Jour 2 : rejouabilité et incident n°1
+[ ] Charger les 5 jours (2026-01-05 à 2026-01-09)
+[ ] Test d'idempotence : relancer un jour déjà chargé, le nombre de lignes de ce jour ne doit pas changer
+[ ] Générer une dérive de schéma en local : python generate_transactions.py --start 2026-01-12 --days 1 --schema-drift --out ./output_drift
+[ ] Déposer transactions_20260112.csv dans Files/landing/transactions, le charger, observer la table
+[ ] Rédiger la fiche docs/incidents/INC-001-derive-schema.md (symptôme, cause, décision, prévention)
+
+Jour 3 : pipeline
+[ ] Créer le pipeline pl_ingest_bronze avec un paramètre run_date (texte)
+[ ] Ajouter une activité Notebook et lui passer run_date depuis le paramètre du pipeline
+[ ] Lancer deux fois et vérifier le journal ops_load_log
+
+Jour 4 : rattrapage de plusieurs jours
+[ ] Ajouter un paramètre tableau dates et une boucle ForEach (exécution séquentielle) autour du notebook
+[ ] Tester sur 3 dates
+[ ] Mesurer le temps d'exécution et noter la consommation dans Capacity Metrics
+
+Jour 5 : documentation et contenu
+[ ] Exporter ou capturer le notebook et le pipeline dans le dépôt (sans secret)
+[ ] Mettre à jour docs/architecture.md (décisions D8 : Bronze en texte, D9 : replaceWhere pour l'idempotence)
+[ ] Mettre à jour le README
+[ ] Newsletter n°2 : « Charger un fichier dans Bronze sans créer de doublons »
+Critères de réussite
+Relancer un jour ne change pas le nombre de lignes.
+Chaque ligne Bronze contient lot, date de chargement et fichier source.
+Un échec est visible dans ops_load_log.
+L'incident de dérive de schéma est documenté.
+À vérifier dans ton interface
+
+Les noms de menus Fabric (paramètres de cellule, ForEach, notebook dans un pipeline) évoluent. Si un libellé diffère, cherche l'équivalent dans la documentation Microsoft Learn.
