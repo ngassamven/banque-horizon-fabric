@@ -1,0 +1,39 @@
+Règles de qualité – couche Silver
+
+Ce document est la spécification des contrôles du notebook 02_silver_transformation.py. Chaque règle a un code, une détection, un traitement et un résultat attendu sur les données générées par generate_transactions.py (5 000 lignes + 50 doublons par jour, seed 42).
+
+Principe
+Rien ne disparaît sans trace : une ligne est soit valide (silver_transactions), soit rejetée avec ses motifs (silver_rejects), soit un doublon supprimé et compté.
+Rapprochement obligatoire : valides + rejetées + doublons supprimés = lignes Bronze du jour. Sinon le notebook échoue.
+Une valeur illisible devient NULL, puis une règle la rejette : la conversion de types ne lève jamais d'exception.
+
+Règles de rejet
+Code	Détection	Traitement	Attendu (par jour)
+R01_ID_MISSING	transaction_id nul ou vide	Rejet	0
+R02_CLIENT_MISSING	client_id nul ou vide	Rejet	50
+R03_CLIENT_UNKNOWN	client_id absent du référentiel clients	Rejet	0
+R04_QTY_INVALID	Quantité nulle, non numérique ou <= 0	Rejet	50
+R05_INSTRUMENT_UNKNOWN	instrument_id absent du référentiel instruments	Rejet	50
+R06_DATE_INVALID	trade_date ni AAAA-MM-JJ ni JJ/MM/AAAA, ou date impossible	Rejet	0
+R07_PRICE_INVALID	Prix nul, non numérique ou <= 0	Rejet	0
+R08_SIDE_INVALID	Sens différent de BUY / SELL	Rejet	0
+Mesures d'information (aucun rejet)
+Code	Signification	Attendu (par jour)
+DUPLICATE_REMOVED	Doublon exact sur transaction_id, une seule ligne conservée	50
+DATE_FORMAT_NORMALIZED	Date JJ/MM/AAAA convertie en vraie date	200
+SCHEMA_ALIAS_USED	Valeur reprise de qty quand quantity est vide	0 (5 000 le jour de la dérive)
+
+Bilan attendu pour un jour normal
+
+5 050 lignes Bronze = 4 850 valides + 150 rejetées + 50 doublons supprimés (taux de rejet = 150 / 5 000 = 3 %, sous le seuil de 5 %).
+
+Décisions
+#	Décision	Pourquoi
+D12	Dates JJ/MM/AAAA corrigées, pas rejetées	Le format est connu et sans ambiguïté : rejeter ferait perdre des données valides. À confirmer avec le fournisseur.
+D13	qty réconcilié avec quantity en Silver	Réponse à INC-001. Bronze reste brut.
+D14	Quantité négative rejetée, pas corrigée	On ne sait pas si c'est une erreur de signe ou une annulation : décision métier.
+D15	Doublons clients signalés, pas fusionnés	Fusionner deux clients est une décision métier. Clé de rapprochement : nom normalisé + pays + date de création.
+D16	Seuil de rejet à 5 %	Valeur arbitraire de départ, à fixer avec le métier.
+Vérification locale
+
+La logique a été exécutée sur Spark 3.5 en local avec les données générées : les chiffres ci-dessus sont ceux obtenus, et ils correspondent aux anomalies injectées (fichiers _controle). Le test dans Fabric reste à faire.

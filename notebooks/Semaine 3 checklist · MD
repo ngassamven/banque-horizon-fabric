@@ -1,0 +1,39 @@
+Semaine 3 - Couche Silver
+
+Objectif : transformer Bronze en tables typées, dédoublonnées et contrôlées, avec des rejets tracés et des mesures de qualité.
+
+Jour 1 : comprendre et préparer
+[ ] Lire docs/regles-qualite.md
+[ ] Vérifier que Bronze contient les 5 jours (25 250 lignes) et, si fait, le 12/01 (dérive)
+[ ] Créer le notebook nb_02_silver_transformation dans horizon-dev, Lakehouse lh_horizon par défaut
+[ ] Coller le code (une cellule par bloc # CELL), marquer la cellule 1 comme paramètres
+Jour 2 : premier jour en Silver
+[ ] Lancer pour run_date = "2026-01-05"
+[ ] Comparer avec le tableau « Attendu » de regles-qualite.md
+[ ] Ouvrir silver_rejects et lire quelques lignes rejetées avec leur motif
+[ ] Arrêter la session Spark
+Jour 3 : idempotence et tous les jours
+[ ] Relancer le 05/01 : mêmes chiffres, pas de doublon dans silver_transactions
+[ ] Charger 06, 07, 08, 09
+[ ] Charger le 12/01 : SCHEMA_ALIAS_USED doit valoir 5 000
+[ ] Vérifier le bilan : valides + rejetées + doublons = lignes Bronze, pour chaque jour
+Jour 4 : brancher au pipeline
+[ ] Ajouter une activité Notebook Silver après celle de Bronze, reliée par le succès
+[ ] Même paramètre run_date
+[ ] Tester sur une date, contrôler l'Entrée de l'activité
+[ ] Rappel : une activité à la fois, sessions arrêtées avant de lancer (erreur 430)
+Jour 5 : tests de robustesse et documentation
+[ ] Mettre max_reject_rate = 0.01 et fail_on_threshold = True : le notebook doit échouer, la table ne doit pas changer
+[ ] Remettre les valeurs par défaut
+[ ] Fiche docs/incidents/INC-003-taux-de-rejet.md
+[ ] Mettre à jour docs/architecture.md (décisions D12 à D16) et le README
+[ ] Newsletter n°3 : « Contrôler la qualité des données en Silver : mes règles et mes résultats »
+Critères de réussite
+Pour un jour normal : 4 850 valides, 150 rejetées, 50 doublons supprimés.
+Relancer un jour ne change aucun chiffre.
+Chaque ligne rejetée porte son motif et sa ligne brute (raw_record).
+Le rapprochement échoue visiblement s'il y a un écart.
+Le seuil de rejet est configurable et testé.
+À vérifier dans ton interface
+
+Les noms de menus Fabric évoluent. Ce code a été testé en local sur Spark 3.5, pas dans Fabric : si une erreur apparaît, copie le message complet.
