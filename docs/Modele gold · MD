@@ -1,0 +1,92 @@
+Modèle Gold – Banque Horizon
+Schéma en étoile
+date_key
+client_key
+instrument_key
+desk_key
+FACT_TRANSACTIONS
+varchar
+transaction_id
+dimension dégénérée
+int
+date_key
+int
+client_key
+int
+instrument_key
+int
+desk_key
+int
+quantity
+decimal
+price
+decimal
+notional
+date
+file_date
+DIM_DATE
+int
+date_key
+PK
+date
+full_date
+DIM_CLIENT
+int
+client_key
+PK
+varchar
+client_id
+clé métier
+date
+valid_from
+date
+valid_to
+bit
+is_current
+DIM_INSTRUMENT
+int
+instrument_key
+PK
+varchar
+instrument_id
+clé métier
+DIM_DESK
+int
+desk_key
+PK
+varchar
+desk_name
+Grain
+
+Une ligne de faits = une transaction valide (transaction_id unique). Les lignes rejetées en Silver ne sont pas dans Gold : elles restent consultables dans silver_rejects.
+
+Dimensions
+Dimension	Type	Pourquoi
+dim_date	Statique, générée	Une ligne par jour : année, trimestre, mois, jour de la semaine, week-end
+dim_desk	Type 1	Peu de valeurs, pas d'historique utile
+dim_instrument	Type 1	Un changement de nom ou de prix de référence écrase l'ancienne valeur
+dim_client	Type 2	Le niveau de risque ou le segment d'un client peut changer : un rapport sur janvier doit utiliser les valeurs de janvier
+Type 2 : comment ça marche
+
+Chaque version d'un client a une période de validité [valid_from ; valid_to[.
+
+Première version : valid_from = 1900-01-01.
+Version courante : valid_to = 9999-12-31, is_current = 1.
+Quand un attribut suivi change (nom, pays, segment, niveau de risque) : la version courante est fermée (valid_to = jour du chargement) et une nouvelle version est créée.
+Les faits se rattachent à la version valable à la date de la transaction (trade_date entre les deux bornes).
+Décisions
+#	Décision	Pourquoi / alternative écartée
+D17	Gold dans le Warehouse, alimenté par un script T-SQL depuis le Lakehouse (requête entre bases)	Équipes SQL/BI à l'aise, procédures stockées, sécurité fine. Alternative : Gold dans le Lakehouse avec Spark
+D18	Clés de substitution calculées (MAX + ROW_NUMBER)	Les pages de documentation consultées ne sont pas cohérentes sur IDENTITY : calcul explicite = comportement connu
+D19	UPDATE puis INSERT plutôt que MERGE	Portable et lisible. MERGE existe en Warehouse, à reconsidérer
+D20	dim_client en type 2, dim_instrument en type 1	L'historique ne compte que là où l'attribut change le sens d'un rapport
+D21	Rattachement du fait à la version client valable à la date de transaction	Cohérence historique des rapports
+D22	Chargement des faits par jour : DELETE + INSERT, sans IF ni transaction	Rejouable sans doublon ; un premier essai avec IF / transaction a produit des erreurs de portée de variables dans l'éditeur
+D23	Rapprochement Silver / Gold : si les chiffres diffèrent, les faits du jour sont supprimés et le journal indique FAILED	Une ligne qui ne trouve pas sa dimension ferait baisser les chiffres en silence
+D24	Clés PRIMARY KEY ajoutées par ALTER TABLE en NOT ENFORCED (non acceptées dans CREATE TABLE), contrôles dans 04_checks.sql	Le moteur n impose pas l unicité : c est à nous de la vérifier
+Limites connues
+La date d'effet d'un changement de client est la date de chargement, pas la date réelle du changement dans la source.
+Les doublons clients ne sont pas fusionnés : duplicate_group_size > 1 les signale.
+Un fait dont le client, l'instrument ou le desk est absent d'une dimension fait échouer le chargement (choix volontaire).
+Pas de gestion de dimension « en retard » (fait qui arrive avant son client).
+Les scripts ont été vérifiés pour leur syntaxe par un analyseur générique (qui ne contrôle pas en profondeur les blocs IF/ELSE), pas exécutés dans Fabric.

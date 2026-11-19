@@ -1,0 +1,42 @@
+Semaine 4 - Couche Gold (Warehouse)
+
+Objectif : un modèle en étoile dans wh_horizon, alimenté depuis Silver par un script rejouable, avec rapprochement Silver / Gold.
+
+Mode d'emploi des scripts (important)
+Un fichier = une exécution : nouvelle requête SQL, coller tout le fichier, ne rien sélectionner, Exécuter.
+Si du texte est sélectionné, seul ce texte est exécuté (c'est l'origine de l'erreur sur un tiret isolé).
+Exception : 04_checks.sql se lit une requête à la fois.
+Jour 1 : préparer
+[ ] Lire docs/modele-gold.md
+[ ] Silver chargé pour les 5 jours (24 250 lignes valides)
+[ ] Dans wh_horizon : SELECT TOP 5 * FROM lh_horizon.dbo.silver_transactions; renvoie 5 lignes
+[ ] Les schémas gold et etl existent (explorateur > Schémas)
+Jour 2 : créer les tables
+[ ] Supprimer les tables déjà créées lors d'un essai précédent (elles sont vides)
+[ ] Exécuter sql/01_create_tables.sql
+[ ] Vérifier : 5 tables dans gold, 1 table dans etl
+[ ] Facultatif : sql/03_add_primary_keys.sql, une commande à la fois
+Jour 3 : charger les faits
+[ ] Exécuter sql/02_load_gold.sql avec @run_date = '2026-01-05'
+[ ] Lire le résultat final : status = SUCCESS, rows_loaded = 4850
+[ ] Contrôle 1 de sql/04_checks.sql : verdict OK
+[ ] Idempotence : relancer le même script : toujours 4 850 lignes pour ce jour
+[ ] Changer la date, relancer : 06, 07, 08, 09 -> 24 250 lignes au total
+Jour 4 : tester le type 2 sur dim_client
+[ ] Requête métier 3 de 04_checks.sql pour CLI00001 : 1 ligne
+[ ] Dans un notebook Spark : spark.sql("UPDATE silver_clients SET risk_rating = CASE WHEN risk_rating = 5 THEN 4 ELSE 5 END WHERE client_id = 'CLI00001'")
+[ ] Relancer 02_load_gold.sql : la requête métier 3 montre 2 lignes
+[ ] Contrôles 3 et 5 : aucune ligne
+[ ] Attention : relancer la cellule 4 du notebook Silver annule ta modification de test
+Jour 5 : documenter et automatiser
+[ ] Mettre à jour docs/architecture.md (décisions D17 à D24) et le README
+[ ] Fiche docs/incidents/INC-004-rapprochement-gold.md : supprimer temporairement un instrument de gold.dim_instrument, relancer, observer status = FAILED et le message, puis relancer pour réparer
+[ ] Automatisation : une fois le script validé à la main, l'ajouter au pipeline (activité Script, après le notebook Silver) ; les versions en procédures stockées sont dans sql/procedures_non_testees/
+[ ] Newsletter n°4 : « Mon modèle en étoile Fabric, de Silver à Gold »
+Critères de réussite
+4 850 lignes de faits par jour, 24 250 pour les 5 jours.
+Contrôle 1 (lignes et montants) : OK pour chaque jour.
+Relancer un jour ne change aucun chiffre.
+Contrôles 2 à 5 : aucune ligne.
+Un changement de client crée une deuxième version.
+Un fait sans dimension laisse status = FAILED dans etl.load_log et n'insère rien.
